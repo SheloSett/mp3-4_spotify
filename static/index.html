@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Media & Spotify Downloader Pro | MP3, Video & Playlists</title>
+  <meta name="description" content="Descargador multimedia avanzado y visual para YouTube, MP3 y Spotify Playlists con conversión de alta fidelidad.">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <div class="app-wrapper">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand-logo">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h1>Media & Spotify Pro</h1>
+          <p>Descargador Multimedia de Alta Fidelidad</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div id="ffmpegStatusBadge" class="badge-status" title="Estado de FFmpeg para conversión de audio">
+          <span class="badge-dot"></span>
+          <span id="ffmpegStatusText">FFmpeg Listo</span>
+        </div>
+        <div id="spotifyStatusBadge" class="badge-status warning" title="Estado de API de Spotify">
+          <span class="badge-dot"></span>
+          <span id="spotifyStatusText">Spotify API</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs" role="tablist">
+      <button class="tab-btn tab-yt active" data-tab="tab-youtube" role="tab" aria-selected="true">
+        <span>📺</span> YouTube & Video
+      </button>
+      <button class="tab-btn tab-spotify" data-tab="tab-spotify" role="tab" aria-selected="false">
+        <span>🎵</span> Spotify Playlists
+      </button>
+      <button class="tab-btn tab-library" data-tab="tab-library" role="tab" aria-selected="false">
+        <span>📁</span> Biblioteca & Descargas
+      </button>
+    </nav>
+
+    <!-- TAB 1: YOUTUBE & MULTIMEDIA -->
+    <main id="tab-youtube" class="tab-content active" role="tabpanel">
+      <section class="glass-card">
+        <div class="card-header-flex">
+          <div>
+            <h2 class="card-title"><span>🎬</span> Descargar Audio / Video de YouTube</h2>
+            <p class="card-desc">Pega el enlace de un video o música para convertir a MP3 (320kbps) o descargar en MP4 HD.</p>
+          </div>
+        </div>
+
+        <form id="ytForm" onsubmit="event.preventDefault(); analyzeYouTubeUrl();">
+          <div class="input-hero-group">
+            <div class="input-glow-wrapper">
+              <span class="input-icon-prefix">🔗</span>
+              <input type="url" id="ytUrlInput" class="input-text" placeholder="Pega aquí el enlace de YouTube (ej: https://www.youtube.com/watch?v=...)" required>
+            </div>
+            <button type="button" class="btn btn-secondary" onclick="pasteClipboard('ytUrlInput')">📋 Pegar</button>
+            <button type="submit" id="btnAnalyzeYt" class="btn btn-secondary">🔍 Previsualizar</button>
+          </div>
+
+          <!-- Selector de formato y calidad UPFRONT -->
+          <div class="yt-format-selector-container" style="margin: 16px 0 20px 0;">
+            <div style="font-size: 0.88rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+              <span>Formato de descarga seleccionado:</span>
+              <span id="selectedFormatTag" style="font-size: 0.75rem; color: #1ed760; font-weight: 700;">🎵 Audio MP3 (320kbps)</span>
+            </div>
+            
+            <div class="options-grid" style="margin: 0 0 14px 0;">
+              <div class="option-box selected audio" id="optYtAudioMain" onclick="selectYtMediaType('audio')">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div class="option-title">🎵 Audio MP3</div>
+                  <span style="background: rgba(29, 185, 84, 0.2); color: #1ed760; font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; font-weight: 700;">MP3</span>
+                </div>
+                <div class="option-sub">Música recodificada en MP3 de alta fidelidad</div>
+              </div>
+
+              <div class="option-box" id="optYtVideoMain" onclick="selectYtMediaType('video')">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div class="option-title">🎬 Video MP4</div>
+                  <span style="background: rgba(255, 0, 85, 0.2); color: #ff4d79; font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; font-weight: 700;">MP4</span>
+                </div>
+                <div class="option-sub">Video completo con audio en alta resolución</div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap; background: rgba(10, 15, 28, 0.5); padding: 14px 18px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+              <div style="display: flex; gap: 10px; align-items: center; flex: 1; min-width: 240px;">
+                <label for="ytQualitySelect" style="font-size: 0.85rem; color: var(--text-secondary); white-space: nowrap;">
+                  Calidad / Bitrate:
+                </label>
+                <select id="ytQualitySelect" class="input-text" style="padding: 8px 12px; font-size: 0.88rem; flex: 1;" onchange="updateSelectedFormatTag()">
+                  <option value="320" selected>MP3 Ultra HD (320 kbps)</option>
+                  <option value="256">MP3 Alta Calidad (256 kbps)</option>
+                  <option value="192">MP3 Estándar (192 kbps)</option>
+                  <option value="128">MP3 Ligero (128 kbps)</option>
+                </select>
+              </div>
+
+              <button type="button" id="btnQuickDownloadYt" class="btn btn-yt" style="min-width: 220px;" onclick="startYouTubeDownload()">
+                ⬇️ Descargar MP3 Directo
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <!-- Preview Card YouTube -->
+        <div id="ytPreview" class="media-preview-container">
+          <div class="media-preview-body">
+            <div class="media-thumb-wrapper">
+              <img id="ytThumb" src="" alt="Miniatura de video" class="media-thumb-img">
+              <span id="ytDuration" class="media-duration-badge">00:00</span>
+            </div>
+            <div class="media-info-col">
+              <div>
+                <h3 id="ytTitle" class="media-title">Título del video</h3>
+                <p id="ytUploader" class="media-subtitle">Canal / Artista</p>
+                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                  <span id="ytViews" class="meta-pill">👁️ -- vistas</span>
+                  <span class="meta-pill">⚡ Descarga Rápida</span>
+                </div>
+              </div>
+
+              <!-- Options Selection in Preview -->
+              <div>
+                <div class="options-grid">
+                  <div class="option-box selected audio" id="optYtAudioPreview" onclick="selectYtMediaType('audio')">
+                    <div class="option-title">🎵 Audio MP3</div>
+                    <div class="option-sub">Música recodificada en MP3</div>
+                  </div>
+                  <div class="option-box" id="optYtVideoPreview" onclick="selectYtMediaType('video')">
+                    <div class="option-title">🎬 Video MP4</div>
+                    <div class="option-sub">Video en alta definición</div>
+                  </div>
+                </div>
+
+                <div style="margin-top: 16px;">
+                  <button type="button" id="btnStartDownloadYt" class="btn btn-yt" style="width: 100%;" onclick="startYouTubeDownload()">
+                    ⬇️ Descargar Ahora
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Progress Box YouTube -->
+        <div id="ytProgressCard" class="progress-card">
+          <div class="progress-header">
+            <div class="progress-title">
+              <span id="ytProgressIcon">⏳</span>
+              <span id="ytProgressTitle">Descargando...</span>
+            </div>
+            <div id="ytProgressPct" class="progress-pct">0%</div>
+          </div>
+          <div class="progress-bar-bg">
+            <div id="ytProgressBar" class="progress-bar-fill"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="ytProgressSpeed">Velocidad: --</span>
+            <span id="ytProgressEta">Tiempo restante: --</span>
+          </div>
+          <div id="ytCompletedActions" class="progress-completed-actions">
+            <a id="ytDirectDownloadLink" href="#" class="btn btn-primary btn-sm" download>📥 Guardar en Dispositivo</a>
+            <button class="btn btn-secondary btn-sm" onclick="openWindowsFolder()">📂 Abrir en Carpeta</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- TAB 2: SPOTIFY DOWNLOADER -->
+    <section id="tab-spotify" class="tab-content" role="tabpanel">
+      <div class="glass-card">
+        <div class="card-header-flex">
+          <div>
+            <h2 class="card-title"><span>🟢</span> Descargar Playlists, Álbumes y Pistas de Spotify</h2>
+            <p class="card-desc">Pega el enlace de Spotify para extraer todas sus canciones y convertirlas automáticamente a MP3.</p>
+          </div>
+        </div>
+
+        <!-- Banner if Spotify API missing -->
+        <div id="spotifyApiNotice" style="display: none; padding: 14px 18px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-sm); margin-bottom: 20px; font-size: 0.88rem;">
+          ⚠️ <strong>Se requieren credenciales de Spotify API</strong> (SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET en tu archivo <code>.env</code> o variables de entorno del servidor/Vercel).
+        </div>
+
+        <form id="spotifyForm" onsubmit="event.preventDefault(); analyzeSpotifyUrl();">
+          <div class="input-hero-group">
+            <div class="input-glow-wrapper">
+              <span class="input-icon-prefix">🎧</span>
+              <input type="url" id="spotifyUrlInput" class="input-text" placeholder="Pega el enlace de Spotify (Playlist, Álbum o Canción)" required>
+            </div>
+            <button type="button" class="btn btn-secondary" onclick="pasteClipboard('spotifyUrlInput')">📋 Pegar</button>
+            <button type="submit" id="btnAnalyzeSpotify" class="btn btn-spotify">🔍 Obtener Canciones</button>
+          </div>
+        </form>
+
+        <!-- Preview Card Spotify -->
+        <div id="spotifyPreview" class="media-preview-container">
+          <div class="media-preview-body">
+            <div class="media-thumb-wrapper square">
+              <img id="spotifyCover" src="" alt="Portada de Playlist" class="media-thumb-img">
+            </div>
+            <div class="media-info-col">
+              <div>
+                <h3 id="spotifyTitle" class="media-title">Nombre de la Playlist</h3>
+                <p id="spotifySubtitle" class="media-subtitle">Creador / Detalles</p>
+                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                  <span id="spotifyCount" class="meta-pill">🎵 0 canciones</span>
+                  <span class="meta-pill">📦 Empaquetado ZIP</span>
+                </div>
+              </div>
+
+              <div>
+                <div style="display: flex; gap: 12px; margin-top: 14px; align-items: center; flex-wrap: wrap;">
+                  <label style="font-size: 0.85rem; color: var(--text-secondary);">Calidad de audio:</label>
+                  <select id="spotifyBitrateSelect" class="input-text" style="padding: 6px 12px; font-size: 0.85rem; width: auto;">
+                    <option value="320">320 kbps (Máxima)</option>
+                    <option value="256">256 kbps (Alta)</option>
+                    <option value="192" selected>192 kbps (Estándar)</option>
+                    <option value="128">128 kbps (Ligero)</option>
+                  </select>
+
+                  <label style="font-size: 0.85rem; color: var(--text-secondary); margin-left: 10px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" id="chkAsZip" checked style="accent-color: #1db954; width: 16px; height: 16px;">
+                    Descargar como archivo .ZIP
+                  </label>
+                </div>
+
+                <div style="margin-top: 16px;">
+                  <button type="button" id="btnStartDownloadSpotify" class="btn btn-spotify" style="width: 100%;" onclick="startSpotifyDownload()">
+                    ⬇️ Descargar Canciones Seleccionadas
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Interactive Track List -->
+          <div class="spotify-tracks-wrapper">
+            <div class="tracks-header-bar">
+              <h4 style="font-size: 0.95rem; font-weight: 600;">Lista de Pistas (<span id="selectedTracksCount">0</span> seleccionadas)</h4>
+              <div style="display: flex; gap: 8px;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleSelectAllTracks(true)">Seleccionar Todas</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleSelectAllTracks(false)">Deseleccionar</button>
+              </div>
+            </div>
+
+            <div class="tracks-table-container">
+              <table class="tracks-table">
+                <thead>
+                  <tr>
+                    <th style="width: 40px;"><input type="checkbox" id="chkMasterTracks" checked onchange="toggleSelectAllTracks(this.checked)"></th>
+                    <th style="width: 40px;">#</th>
+                    <th>Título</th>
+                    <th>Artista</th>
+                    <th>Álbum</th>
+                    <th style="width: 70px; text-align: right;">Duración</th>
+                  </tr>
+                </thead>
+                <tbody id="spotifyTracksBody">
+                  <!-- Inyectado dinámicamente con JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Progress Box Spotify -->
+        <div id="spotifyProgressCard" class="progress-card">
+          <div class="progress-header">
+            <div class="progress-title">
+              <span id="spotifyProgressIcon">⏳</span>
+              <span id="spotifyProgressTitle">Descargando colección...</span>
+            </div>
+            <div id="spotifyProgressPct" class="progress-pct">0%</div>
+          </div>
+          <div class="progress-bar-bg">
+            <div id="spotifyProgressBar" class="progress-bar-fill"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="spotifyCurrentItem">Procesando canciones...</span>
+            <span id="spotifyItemCount">0/0 pistas</span>
+          </div>
+          <div id="spotifyCompletedActions" class="progress-completed-actions">
+            <a id="spotifyDirectDownloadLink" href="#" class="btn btn-spotify btn-sm" download>📥 Guardar Archivo ZIP / MP3</a>
+            <button class="btn btn-secondary btn-sm" onclick="openWindowsFolder()">📂 Abrir en Carpeta</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: BIBLIOTECA & DESCARGAS -->
+    <section id="tab-library" class="tab-content" role="tabpanel">
+      <div class="glass-card">
+        <div class="card-header-flex">
+          <div>
+            <h2 class="card-title"><span>📁</span> Biblioteca de Archivos Descargados</h2>
+            <p class="card-desc">Escucha tus audios con el reproductor integrado o descárgalos directamente al navegador.</p>
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-secondary btn-sm" onclick="openWindowsFolder()">📂 Abrir en Explorador</button>
+            <button class="btn btn-primary btn-sm" onclick="loadLibraryFiles()">🔄 Actualizar</button>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <input type="text" id="librarySearchInput" class="input-text" placeholder="🔍 Buscar en la biblioteca por nombre o formato..." oninput="filterLibraryFiles()">
+        </div>
+
+        <div id="libraryGrid" class="library-grid">
+          <!-- Inyectado dinámicamente con JS -->
+        </div>
+
+        <div id="libraryEmptyState" style="display: none; text-align: center; padding: 48px 20px; color: var(--text-muted);">
+          <div style="font-size: 3rem; margin-bottom: 12px;">📂</div>
+          <h3 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 6px;">No hay archivos en la biblioteca</h3>
+          <p style="font-size: 0.88rem;">Tus descargas de YouTube o Spotify aparecerán aquí.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Floating Audio Player Bar -->
+  <div id="audioPlayerBar" class="audio-player-bar">
+    <div class="player-info">
+      <div style="font-size: 1.4rem;">🎵</div>
+      <div>
+        <div id="playerTitle" class="player-title">Canción</div>
+        <div id="playerSubtitle" style="font-size: 0.75rem; color: var(--text-muted);">Media & Spotify Pro</div>
+      </div>
+    </div>
+
+    <div class="player-controls">
+      <div class="player-btn-group">
+        <button id="playerPlayBtn" class="player-play-btn" onclick="toggleAudioPlayback()">▶</button>
+      </div>
+      <div class="player-timeline">
+        <span id="playerCurrentTime" class="player-time">00:00</span>
+        <input type="range" id="playerSeekbar" class="player-slider" min="0" max="100" value="0" oninput="seekAudio(this.value)">
+        <span id="playerDuration" class="player-time">00:00</span>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <span style="font-size: 0.85rem;">🔊</span>
+      <input type="range" id="playerVolume" class="player-slider" style="width: 70px;" min="0" max="1" step="0.05" value="1" oninput="setAudioVolume(this.value)">
+      <button class="btn btn-secondary btn-icon btn-sm" onclick="closeAudioPlayer()" title="Cerrar reproductor">✕</button>
+    </div>
+
+    <audio id="globalAudioElement" preload="metadata"></audio>
+  </div>
+
+  <!-- Modal de Confirmación de Eliminación -->
+  <div id="customConfirmModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 440px; text-align: center;">
+      <div style="font-size: 2.8rem; margin-bottom: 12px;">🗑️</div>
+      <h3 style="font-size: 1.25rem; font-family: var(--font-heading); margin-bottom: 8px;">¿Eliminar archivo?</h3>
+      <p id="customConfirmMsg" style="font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 24px; word-break: break-word;">
+        ¿Estás seguro de que deseas eliminar este archivo? Esta acción no se puede deshacer.
+      </p>
+      <div style="display: flex; gap: 12px;">
+        <button type="button" id="customConfirmCancelBtn" class="btn btn-secondary" style="flex: 1;">Cancelar</button>
+        <button type="button" id="customConfirmOkBtn" class="btn btn-danger" style="flex: 1;">Sí, Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Main JavaScript File -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

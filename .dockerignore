@@ -1,0 +1,46 @@
+# =================================================================
+# Igual que .gitignore: git NO acepta comentarios al final de la linea.
+# Docker tampoco. Cada explicacion va en su propia linea.
+# =================================================================
+
+# SECRETOS
+# Sin esto, "COPY . ." horneaba tu .env local dentro de la imagen y tus
+# credenciales de desarrollo pisaban las variables de Render.
+.env
+.env.local
+.env.*.local
+.cache
+*.cache
+
+# ARCHIVOS DESCARGADOS
+# Mas de 500 MB de musica que harian la imagen gigante e imposible de deployar.
+descargas/
+Goat/
+The Best/
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.wav
+*.zip
+
+# ENTORNO PYTHON LOCAL
+# El .venv es de Windows; dentro del contenedor Linux no sirve y rompe.
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# GIT Y HERRAMIENTAS
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+
+# ESPECIFICOS DE WINDOWS
+# El .bat es un lanzador de Windows, no tiene sentido en el contenedor.
+iniciar_web.bat
+Thumbs.db
+desktop.ini

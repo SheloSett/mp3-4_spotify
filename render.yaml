@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: media-spotify-downloader
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      # PORT comentado a proposito: Render inyecta su propio PORT y la app
+      # ahora lo respeta (ver CMD del Dockerfile). Fijarlo a mano en 8000
+      # pisaba el valor de Render y podia dejar el deploy sin responder.
+      # - key: PORT
+      #   value: 8000
+
+      # sync: false = el valor NO se guarda en este archivo (que va a git).
+      # Se carga a mano desde el dashboard de Render.
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+
+      # Contraseña de acceso a la web. OBLIGATORIA en un deploy publico:
+      # sin ella cualquiera con la URL entra, descarga y borra tus archivos.
+      - key: APP_USERNAME
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+
+      - key: DOWNLOAD_DIR
+        value: descargas

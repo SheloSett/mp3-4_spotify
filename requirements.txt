@@ -1,0 +1,15 @@
+# Motor de descarga y extracción de medios
+yt-dlp>=2026.7.4
+spotipy>=2.26.0
+mutagen>=1.48.1
+
+# Servidor Web y API
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.1
+aiofiles>=25.1.0
+python-dotenv>=1.2.2
+requests>=2.34.2
+
+# NOTA: ffmpeg es necesario para procesar y convertir audio a MP3.
+# En Windows local: winget install Gyan.FFmpeg
+# En Linux/Docker: apt-get install -y ffmpeg

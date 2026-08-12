@@ -1,0 +1,54 @@
+# =================================================================
+# SECRETOS - NUNCA SUBIR A GIT
+# =================================================================
+# OJO: git NO acepta comentarios al final de la linea (inline).
+# Si escribis ".env  # comentario", el patron deja de funcionar.
+# Por eso cada explicacion va en su propia linea.
+
+# Contiene tus credenciales reales de Spotify
+.env
+.env.local
+.env.*.local
+
+# Cache de token de acceso de Spotipy (token Bearer vivo)
+.cache
+*.cache
+
+# =================================================================
+# ARCHIVOS DESCARGADOS (musica/video con copyright + peso)
+# =================================================================
+descargas/
+Goat/
+The Best/
+*.mp3
+*.mp4
+*.m4a
+*.webm
+*.wav
+*.zip
+
+# =================================================================
+# ENTORNO PYTHON
+# =================================================================
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# =================================================================
+# CONFIG LOCAL DE HERRAMIENTAS / IDE
+# =================================================================
+.claude/settings.local.json
+.vscode/
+.idea/
+*.swp
+
+# =================================================================
+# SISTEMA OPERATIVO
+# =================================================================
+Thumbs.db
+desktop.ini
+.DS_Store
