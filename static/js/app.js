@@ -8,6 +8,41 @@ let currentYtMediaType = 'audio';
 let activeEventSource = null;
 let libraryFilesCache = [];
 
+// Recuerda para que tipo de medio se armo el desplegable de calidad.
+// Sin esto, selectYtMediaType() reconstruia el <select> con innerHTML en CADA
+// llamada, y como se llama en cada tecla que escribis en el campo de la URL,
+// la calidad que habias elegido volvia sola al valor por defecto.
+let ultimoTipoCalidadRenderizado = null;
+
+// Tarea de descarga en curso, para poder cancelarla desde la interfaz.
+let currentTaskId = null;
+let currentTaskPrefix = null;
+
+
+/* =====================================================================
+   CANCELACION DE DESCARGAS
+   ===================================================================== */
+function mostrarBotonCancelar(prefix, visible) {
+  const fila = document.getElementById(prefix === 'yt' ? 'ytCancelRow' : 'spotifyCancelRow');
+  if (fila) fila.style.display = visible ? 'block' : 'none';
+}
+
+async function cancelCurrentTask() {
+  if (!currentTaskId) return;
+
+  try {
+    const res = await fetch(`/api/tasks/${currentTaskId}/cancel`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast('Cancelando descarga...', 'info');
+    } else {
+      showToast('No se pudo cancelar la descarga.', 'error');
+    }
+  } catch (err) {
+    showToast('Error al cancelar: ' + err.message, 'error');
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   loadConfigAndDiagnostics();
@@ -81,7 +116,19 @@ function showToast(message, type = 'info') {
   if (type === 'success') icon = '✅';
   if (type === 'error') icon = '❌';
 
-  toast.innerHTML = `<span>${icon}</span> <div>${message}</div>`;
+  // Antes: toast.innerHTML = `<span>${icon}</span> <div>${message}</div>`;
+  // Se comento porque 'message' llega desde el servidor (errores de yt-dlp,
+  // de Spotify o nombres de archivo). Si el texto contenia HTML, se ejecutaba
+  // en la pagina. El resto del codigo ya escapaba con escapeHtml(); esto era
+  // la excepcion. Con textContent el navegador lo trata siempre como texto.
+  const iconSpan = document.createElement('span');
+  iconSpan.textContent = icon;
+
+  const msgDiv = document.createElement('div');
+  msgDiv.textContent = message;
+
+  toast.appendChild(iconSpan);
+  toast.appendChild(msgDiv);
   container.appendChild(toast);
 
   setTimeout(() => {
@@ -125,6 +172,15 @@ async function loadConfigAndDiagnostics() {
       if (ffmpegBadge) ffmpegBadge.className = 'badge-status warning';
       if (ffmpegText) ffmpegText.textContent = 'FFmpeg Faltante';
     }
+
+    // Los botones "Abrir en Explorador" abren una carpeta en la maquina donde
+    // corre el SERVIDOR. Si entras desde el celular o desde un deploy remoto
+    // no hacen nada util, asi que se ocultan.
+    if (!diagRes.is_local_request) {
+      document.querySelectorAll('[onclick="openWindowsFolder()"]').forEach(btn => {
+        btn.style.display = 'none';
+      });
+    }
   } catch (err) {
     console.error('Error cargando diagnósticos:', err);
   }
@@ -164,7 +220,11 @@ async function analyzeYouTubeUrl() {
     showToast('Error al analizar URL: ' + err.message, 'error');
   } finally {
     btn.disabled = false;
-    btn.textContent = '🔍 Analizar Enlace';
+    // Antes decia '🔍 Analizar Enlace', que no coincide con el texto original
+    // del boton en el HTML ('🔍 Previsualizar'): despues de analizar una vez,
+    // el boton cambiaba de nombre solo y ya no volvia al original.
+    // btn.textContent = '🔍 Analizar Enlace';
+    btn.textContent = '🔍 Previsualizar';
     selectYtMediaType(currentYtMediaType);
   }
 }
@@ -202,13 +262,16 @@ function selectYtMediaType(type) {
     if (optAudioPrev) { optAudioPrev.className = 'option-box selected audio'; }
     if (optVideoPrev) { optVideoPrev.className = 'option-box'; }
 
-    if (qualitySelect) {
+    // Solo se reconstruye si REALMENTE cambio el tipo de medio.
+    // Antes se reescribia siempre y pisaba la eleccion del usuario.
+    if (qualitySelect && ultimoTipoCalidadRenderizado !== 'audio') {
       qualitySelect.innerHTML = `
         <option value="320" selected>MP3 Ultra HD (320 kbps)</option>
         <option value="256">MP3 Alta Calidad (256 kbps)</option>
         <option value="192">MP3 Estándar (192 kbps)</option>
         <option value="128">MP3 Ligero (128 kbps)</option>
       `;
+      ultimoTipoCalidadRenderizado = 'audio';
     }
 
     if (quickBtn) {
@@ -227,12 +290,14 @@ function selectYtMediaType(type) {
     if (optVideoPrev) { optVideoPrev.className = 'option-box selected video'; }
     if (optAudioPrev) { optAudioPrev.className = 'option-box'; }
 
-    if (qualitySelect) {
+    // Misma logica que en audio: reconstruir solo al cambiar de tipo.
+    if (qualitySelect && ultimoTipoCalidadRenderizado !== 'video') {
       qualitySelect.innerHTML = `
         <option value="best" selected>MP4 Mejor Calidad (1080p / Auto)</option>
         <option value="720">MP4 Alta Definición (720p)</option>
         <option value="480">MP4 Definición Estándar (480p)</option>
       `;
+      ultimoTipoCalidadRenderizado = 'video';
     }
 
     if (quickBtn) {
@@ -347,7 +412,15 @@ async function analyzeSpotifyUrl() {
     if (!res.ok || !data.success) {
       if (data.needs_credentials) {
         document.getElementById('spotifyApiNotice').style.display = 'block';
-        switchTab('tab-settings');
+
+        // BUG: switchTab('tab-settings') apuntaba a una pestaña que NO existe
+        // en el HTML. switchTab desactiva todos los paneles y activa el que
+        // coincide; como ninguno coincidia, la pagina entera quedaba en blanco
+        // y habia que recargar. Se comento: con mostrar el aviso alcanza.
+        // switchTab('tab-settings');
+
+        // Llevamos la vista hasta el aviso para que no pase desapercibido.
+        document.getElementById('spotifyApiNotice').scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       showToast(data.error || 'No se pudo obtener información de Spotify.', 'error');
       return;
@@ -483,6 +556,11 @@ function listenToTaskProgress(taskId, prefix, onComplete) {
   const eventSource = new EventSource(`/api/tasks/${taskId}/events`);
   activeEventSource = eventSource;
 
+  // Guardamos la tarea en curso para que el boton de cancelar sepa a cual apuntar.
+  currentTaskId = taskId;
+  currentTaskPrefix = prefix;
+  mostrarBotonCancelar(prefix, true);
+
   // Resetear estado visual de inicio
   if (prefix === 'yt') {
     const icon = document.getElementById('ytProgressIcon');
@@ -524,6 +602,8 @@ function listenToTaskProgress(taskId, prefix, onComplete) {
 
     if (task.status === 'completed') {
       eventSource.close();
+      mostrarBotonCancelar(prefix, false);
+      currentTaskId = null;
       showToast('🎉 ¡Descarga completada con éxito!', 'success');
 
       if (prefix === 'yt') {
@@ -580,8 +660,41 @@ function listenToTaskProgress(taskId, prefix, onComplete) {
       }
 
       if (onComplete) onComplete();
+    } else if (task.status === 'cancelled') {
+      // Rama nueva: antes el estado 'cancelled' no se manejaba. El servidor
+      // cerraba el stream y la interfaz quedaba con los botones deshabilitados
+      // y la barra congelada hasta recargar la pagina.
+      eventSource.close();
+      mostrarBotonCancelar(prefix, false);
+      currentTaskId = null;
+      showToast('Descarga cancelada.', 'info');
+
+      const icon = document.getElementById(prefix === 'yt' ? 'ytProgressIcon' : 'spotifyProgressIcon');
+      const pTitle = document.getElementById(prefix === 'yt' ? 'ytProgressTitle' : 'spotifyProgressTitle');
+      const pBar = document.getElementById(prefix === 'yt' ? 'ytProgressBar' : 'spotifyProgressBar');
+      const pPct = document.getElementById(prefix === 'yt' ? 'ytProgressPct' : 'spotifyProgressPct');
+
+      if (icon) icon.textContent = '⛔';
+      if (pTitle) pTitle.textContent = 'Descarga cancelada por el usuario';
+      if (pBar) pBar.style.width = '0%';
+      if (pPct) pPct.textContent = '0%';
+
+      if (prefix === 'yt') {
+        selectYtMediaType(currentYtMediaType);
+      } else {
+        const spotifyBtn = document.getElementById('btnStartDownloadSpotify');
+        if (spotifyBtn) {
+          spotifyBtn.disabled = false;
+          updateSelectedSpotifyCount();
+        }
+      }
+
+      if (onComplete) onComplete();
+
     } else if (task.status === 'error') {
       eventSource.close();
+      mostrarBotonCancelar(prefix, false);
+      currentTaskId = null;
       showToast('❌ Error en la descarga: ' + (task.error || 'Error desconocido'), 'error');
 
       if (prefix === 'yt') {
@@ -608,6 +721,7 @@ function listenToTaskProgress(taskId, prefix, onComplete) {
 
   eventSource.onerror = () => {
     eventSource.close();
+    mostrarBotonCancelar(prefix, false);
     if (prefix === 'yt') {
       selectYtMediaType(currentYtMediaType);
     } else {

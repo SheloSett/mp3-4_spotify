@@ -172,6 +172,13 @@
             <span id="ytProgressSpeed">Velocidad: --</span>
             <span id="ytProgressEta">Tiempo restante: --</span>
           </div>
+          <!-- Boton de cancelar: el endpoint /api/tasks/{id}/cancel ya existia
+               en el backend pero no habia forma de llamarlo desde la interfaz. -->
+          <div id="ytCancelRow" style="margin-top: 12px; display: none;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="cancelCurrentTask()">
+              ✕ Cancelar descarga
+            </button>
+          </div>
           <div id="ytCompletedActions" class="progress-completed-actions">
             <a id="ytDirectDownloadLink" href="#" class="btn btn-primary btn-sm" download>📥 Guardar en Dispositivo</a>
             <button class="btn btn-secondary btn-sm" onclick="openWindowsFolder()">📂 Abrir en Carpeta</button>
@@ -292,6 +299,12 @@
           <div class="progress-meta">
             <span id="spotifyCurrentItem">Procesando canciones...</span>
             <span id="spotifyItemCount">0/0 pistas</span>
+          </div>
+          <!-- Cancelar lote de Spotify: corta despues de la cancion en curso. -->
+          <div id="spotifyCancelRow" style="margin-top: 12px; display: none;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="cancelCurrentTask()">
+              ✕ Cancelar descarga
+            </button>
           </div>
           <div id="spotifyCompletedActions" class="progress-completed-actions">
             <a id="spotifyDirectDownloadLink" href="#" class="btn btn-spotify btn-sm" download>📥 Guardar Archivo ZIP / MP3</a>

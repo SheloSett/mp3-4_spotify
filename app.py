@@ -152,8 +152,11 @@ async def analyze_url_endpoint(req: AnalyzeRequest):
     if not url:
         raise HTTPException(status_code=400, detail="La URL no puede estar vacía.")
 
-    # Ejecutar en threadpool para no bloquear el bucle de eventos
-    loop = asyncio.get_event_loop()
+    # Ejecutar en threadpool para no bloquear el bucle de eventos.
+    # get_event_loop() esta deprecado dentro de una corrutina (avisa en 3.12+
+    # y va a dar error en versiones futuras). get_running_loop() es el correcto.
+    # loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, downloader_core.analyze_url, url)
 
     if not result.get("success"):
@@ -173,8 +176,10 @@ async def download_youtube_endpoint(req: YouTubeDownloadRequest, background_task
         title=f"Preparando descarga de {req.media_type.upper()}..."
     )
 
-    # Iniciar la descarga en segundo plano
-    loop = asyncio.get_event_loop()
+    # Iniciar la descarga en segundo plano.
+    # La linea de abajo se comento: creaba una referencia al bucle de eventos
+    # que no se usaba en ningun lado (BackgroundTasks maneja su propio hilo).
+    # loop = asyncio.get_event_loop()
     background_tasks.add_task(
         downloader_core.download_youtube_media,
         task_id=task_id,
@@ -221,7 +226,7 @@ async def get_task_status_endpoint(task_id: str):
 
 
 @app.get("/api/tasks/{task_id}/events")
-async def task_events_sse(task_id: str):
+async def task_events_sse(task_id: str, request: Request):
     """Transmite eventos en tiempo real (SSE) sobre el progreso de una tarea."""
     task = downloader_core.get_task(task_id)
     if not task:
@@ -231,6 +236,13 @@ async def task_events_sse(task_id: str):
         last_progress = -1
         last_status = ""
         while True:
+            # Cortar si el navegador cerro la conexion (pestaña cerrada,
+            # recarga, etc). Antes el generador seguia girando cada 0.5s
+            # hasta que la tarea terminara, aunque ya no hubiera nadie
+            # escuchando: cada descarga abandonada dejaba un bucle vivo.
+            if await request.is_disconnected():
+                break
+
             current_task = downloader_core.get_task(task_id)
             if not current_task:
                 break
@@ -350,17 +362,40 @@ async def delete_file_post_endpoint(req: FileDeleteRequest):
 @app.delete("/api/files/{file_path:path}")
 async def delete_file_endpoint(file_path: str):
     """Elimina un archivo de la biblioteca."""
-    import urllib.parse
-    file_path = urllib.parse.unquote(file_path)
+    # Starlette ya entrega el parametro de ruta decodificado; volver a llamar
+    # a unquote() era una segunda decodificacion (mismo bug que en los
+    # endpoints de descarga y streaming).
+    # import urllib.parse
+    # file_path = urllib.parse.unquote(file_path)
     success = downloader_core.delete_file(file_path)
     if not success:
         raise HTTPException(status_code=404, detail="No se pudo eliminar el archivo.")
     return {"success": True, "message": "Archivo eliminado correctamente."}
 
 
+def _es_peticion_local(request: Request) -> bool:
+    """
+    Indica si la peticion viene de la misma maquina donde corre el servidor.
+
+    Sirve para las acciones que solo tienen sentido en uso local, como abrir
+    el explorador de archivos: si entras desde el celular o desde un deploy
+    en Render, abrir una carpeta la abriria EN EL SERVIDOR, no en tu equipo.
+    """
+    host = getattr(request.client, "host", "") if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
 @app.post("/api/files/open-folder")
-async def open_folder_endpoint():
+async def open_folder_endpoint(request: Request):
     """Abre la carpeta de descargas en el Explorador de archivos del sistema operativo."""
+    # Antes se ejecutaba siempre. En un deploy remoto era, en el mejor de los
+    # casos, inutil (intenta abrir una ventana en un contenedor sin escritorio).
+    if not _es_peticion_local(request):
+        return {
+            "success": False,
+            "error": "Esta accion solo funciona cuando abris la app en la misma PC donde corre el servidor."
+        }
+
     success = downloader_core.open_downloads_folder()
     return {"success": success}
 
@@ -430,9 +465,13 @@ async def validate_spotify_credentials(req: SpotifyValidateRequest):
 
 
 @app.get("/api/diagnostics")
-async def get_diagnostics_endpoint():
+async def get_diagnostics_endpoint(request: Request):
     """Obtiene el diagnóstico del entorno (ffmpeg, yt-dlp, python, almacenamiento)."""
-    return config.get_system_diagnostics()
+    diagnostics = config.get_system_diagnostics()
+    # El frontend usa este dato para ocultar los botones "Abrir en Explorador"
+    # cuando no estas en la misma maquina que el servidor.
+    diagnostics["is_local_request"] = _es_peticion_local(request)
+    return diagnostics
 
 
 # =====================================================================

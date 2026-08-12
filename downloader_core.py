@@ -6,6 +6,7 @@ import uuid
 import shutil
 import zipfile
 import asyncio
+import urllib.parse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import yt_dlp
@@ -15,6 +16,28 @@ from config import get_config, get_download_path, buscar_ffmpeg, BASE_DIR, safe_
 
 # Administrador de tareas en memoria
 TASKS: Dict[str, Dict[str, Any]] = {}
+
+# Cuanto tiempo se conservan las tareas ya terminadas antes de descartarlas.
+# Sin esto el diccionario TASKS crecia para siempre: cada descarga dejaba su
+# registro en memoria y nunca se liberaba (fuga de memoria en usos largos).
+TASK_RETENTION_SECONDS = 3600  # 1 hora
+
+
+class DescargaCancelada(Exception):
+    """Excepcion propia para abortar una descarga de yt-dlp desde el hook."""
+    pass
+
+
+def _limpiar_tareas_viejas():
+    """Descarta tareas terminadas hace mas de TASK_RETENTION_SECONDS."""
+    ahora = time.time()
+    terminadas = ("completed", "error", "cancelled")
+    vencidas = [
+        tid for tid, t in TASKS.items()
+        if t.get("status") in terminadas and (ahora - t.get("updated_at", ahora)) > TASK_RETENTION_SECONDS
+    ]
+    for tid in vencidas:
+        TASKS.pop(tid, None)
 
 
 def format_duration(seconds: Optional[int]) -> str:
@@ -41,6 +64,9 @@ def sanitize_filename(name: str) -> str:
 
 def create_task(task_type: str, title: str = "Iniciando descarga...") -> str:
     """Crea un registro de tarea para seguimiento en tiempo real."""
+    # Aprovechamos cada tarea nueva para purgar las viejas ya terminadas.
+    _limpiar_tareas_viejas()
+
     task_id = str(uuid.uuid4())
     TASKS[task_id] = {
         "id": task_id,
@@ -160,7 +186,9 @@ def get_spotify_info(url: str) -> Dict[str, Any]:
                     "artists": artists,
                     "duration_ms": duration_ms,
                     "duration_str": format_duration(duration_ms // 1000),
-                    "album": t["album"]["name"]
+                    "album": t["album"]["name"],
+                    # Se usa para incrustar la portada dentro del MP3.
+                    "cover_url": image
                 }]
             }
 
@@ -189,7 +217,9 @@ def get_spotify_info(url: str) -> Dict[str, Any]:
                     "artists": t_artists,
                     "duration_ms": dur_ms,
                     "duration_str": format_duration(dur_ms // 1000),
-                    "album": album["name"]
+                    "album": album["name"],
+                    # Todas las pistas de un album comparten la misma portada.
+                    "cover_url": image
                 })
 
             return {
@@ -230,6 +260,12 @@ def get_spotify_info(url: str) -> Dict[str, Any]:
                 t_artists = ", ".join([a["name"] for a in item.get("artists", [])])
                 dur_ms = item.get("duration_ms", 0)
                 album_name = item.get("album", {}).get("name", "")
+
+                # En una playlist cada cancion puede venir de un album distinto,
+                # asi que la portada se toma de cada pista y no de la coleccion.
+                album_images = item.get("album", {}).get("images") or []
+                track_cover = album_images[0]["url"] if album_images else image
+
                 tracks_data.append({
                     "index": idx,
                     "id": item.get("id", str(idx)),
@@ -237,7 +273,8 @@ def get_spotify_info(url: str) -> Dict[str, Any]:
                     "artists": t_artists,
                     "duration_ms": dur_ms,
                     "duration_str": format_duration(dur_ms // 1000),
-                    "album": album_name
+                    "album": album_name,
+                    "cover_url": track_cover
                 })
 
             return {
@@ -326,6 +363,15 @@ def make_ytdlp_progress_hook(task_id: str):
         if task_id not in TASKS:
             return
 
+        # CANCELACION REAL:
+        # Antes el boton "Cancelar" solo cambiaba el estado de la tarea, pero
+        # nadie lo miraba durante una descarga de YouTube: el archivo se seguia
+        # bajando entero igual. yt-dlp llama a este hook constantemente, asi que
+        # es el lugar correcto para abortar. Al lanzar la excepcion, yt-dlp corta
+        # la descarga y la atrapamos en download_youtube_media.
+        if TASKS[task_id].get("status") == "cancelled":
+            raise DescargaCancelada("Descarga cancelada por el usuario.")
+
         status = d.get('status')
         if status == 'downloading':
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
@@ -404,6 +450,14 @@ def download_youtube_media(
             ydl_opts['format'] = 'bestvideo+bestaudio/best'
 
         ydl_opts['outtmpl'] = str(dest_folder / '%(title)s.%(ext)s')
+
+        # merge_output_format le dice a yt-dlp que junte video+audio
+        # directamente en un contenedor MP4 (remux: solo copia los streams,
+        # tarda segundos). Sin esta linea yt-dlp mezclaba en MKV y despues el
+        # postprocesador FFmpegVideoConvertor RE-CODIFICABA todo el video a
+        # MP4, que en un video largo son varios minutos con la barra clavada
+        # en 99%. El convertor queda como respaldo por si el remux no aplica.
+        ydl_opts['merge_output_format'] = 'mp4'
         ydl_opts['postprocessors'] = [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
@@ -432,9 +486,13 @@ def download_youtube_media(
 
             file_name = os.path.basename(final_filepath)
             
-            # Construir URL relativa para descarga directa en el navegador
+            # Construir URL relativa para descarga directa en el navegador.
+            # quote() es necesario porque los titulos de YouTube traen de todo:
+            # un "#" cortaba la URL en el navegador (lo toma como ancla) y un
+            # "?" convertia el resto del nombre en query string, asi que el
+            # link de descarga fallaba con 404. safe="/" preserva las carpetas.
             rel_path = os.path.relpath(final_filepath, BASE_DIR / get_config()["download_dir"]).replace("\\", "/")
-            download_url = f"/api/files/download/{rel_path}"
+            download_url = f"/api/files/download/{urllib.parse.quote(rel_path, safe='/')}"
 
             update_task(
                 task_id,
@@ -448,17 +506,88 @@ def download_youtube_media(
             )
             return final_filepath
 
+    except DescargaCancelada:
+        # Cancelacion pedida por el usuario: no es un error, no mostrar alerta roja.
+        update_task(
+            task_id,
+            status="cancelled",
+            progress=0.0,
+            speed="--",
+            eta="--",
+            title="Descarga cancelada por el usuario."
+        )
+        return None
+
     except Exception as e:
         err_msg = str(e)
         update_task(task_id, status="error", error=err_msg, title="Error en la descarga")
         return None
 
 
+def embed_mp3_metadata(
+    filepath: str,
+    title: str,
+    artist: str,
+    album: str = "",
+    cover_url: Optional[str] = None
+) -> bool:
+    """
+    Escribe las etiquetas ID3 (titulo, artista, album) y la caratula dentro
+    del MP3 descargado.
+
+    Por que existe: mutagen estaba declarado en requirements.txt pero no se
+    usaba en ningun lado. Resultado: los MP3 bajados de una playlist quedaban
+    "pelados" - sin titulo, artista, album ni portada. En el celular o en
+    cualquier reproductor aparecian como "Pista desconocida" y sin orden.
+    Como los datos reales ya los tenemos de la API de Spotify, los escribimos
+    nosotros en vez de confiar en el titulo del video de YouTube.
+    """
+    try:
+        from mutagen.mp3 import MP3
+        from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, ID3NoHeaderError
+
+        try:
+            audio = ID3(filepath)
+        except ID3NoHeaderError:
+            # El MP3 recien convertido puede no tener contenedor ID3 todavia.
+            audio = ID3()
+
+        audio.add(TIT2(encoding=3, text=title))
+        audio.add(TPE1(encoding=3, text=artist))
+        if album:
+            audio.add(TALB(encoding=3, text=album))
+
+        # Caratula: se baja la imagen de Spotify y se incrusta en el archivo.
+        if cover_url:
+            try:
+                resp = requests.get(cover_url, timeout=15)
+                if resp.status_code == 200:
+                    audio.add(APIC(
+                        encoding=3,
+                        mime="image/jpeg",
+                        type=3,          # 3 = portada frontal
+                        desc="Cover",
+                        data=resp.content
+                    ))
+            except Exception as e:
+                # Que falle la portada no debe arruinar el resto de las etiquetas.
+                print(f"No se pudo incrustar la caratula de '{title}': {e}")
+
+        audio.save(filepath, v2_version=3)
+        return True
+
+    except Exception as e:
+        print(f"No se pudieron escribir los metadatos de '{title}': {e}")
+        return False
+
+
 def download_single_spotify_track(
     title: str,
     artist: str,
     download_folder: Path,
-    bitrate: str = "192"
+    bitrate: str = "192",
+    album: str = "",
+    cover_url: Optional[str] = None
 ) -> Optional[str]:
     """Busca una canción en YouTube y la guarda como MP3."""
     safe_title = sanitize_filename(title)
@@ -497,6 +626,9 @@ def download_single_spotify_track(
                 final_filepath = str(download_folder / f'{safe_title} - {safe_artist}.mp3')
 
             if os.path.exists(final_filepath):
+                # Escribir las etiquetas ID3 con los datos reales de Spotify,
+                # que son mucho mas confiables que el titulo del video de YouTube.
+                embed_mp3_metadata(final_filepath, title, artist, album, cover_url)
                 return final_filepath
             return None
     except Exception as e:
@@ -548,7 +680,14 @@ def download_spotify_batch(
             title=f"[{index}/{total_tracks}] {item_label}"
         )
 
-        file_path = download_single_spotify_track(title, artists, dest_folder, audio_bitrate)
+        file_path = download_single_spotify_track(
+            title,
+            artists,
+            dest_folder,
+            audio_bitrate,
+            album=track.get("album", ""),
+            cover_url=track.get("cover_url")
+        )
         if file_path and os.path.exists(file_path):
             successful_tracks.append(file_path)
 
@@ -570,7 +709,8 @@ def download_spotify_batch(
 
         file_size_mb = round(os.path.getsize(str(zip_path)) / (1024 * 1024), 2)
         rel_path = os.path.relpath(str(zip_path), BASE_DIR / get_config()["download_dir"]).replace("\\", "/")
-        download_url = f"/api/files/download/{rel_path}"
+        # quote(): los nombres de playlist con "#", "?" o "&" rompian el link.
+        download_url = f"/api/files/download/{urllib.parse.quote(rel_path, safe='/')}"
 
         update_task(
             task_id,
@@ -590,7 +730,7 @@ def download_spotify_batch(
             progress=100.0,
             file_path=str(dest_folder),
             file_name=safe_collection,
-            download_url=f"/api/files/download/{rel_folder}",
+            download_url=f"/api/files/download/{urllib.parse.quote(rel_folder, safe='/')}",
             title=f"¡Descarga completada! {len(successful_tracks)}/{total_tracks} canciones guardadas"
         )
     else:
@@ -632,8 +772,11 @@ def list_downloaded_files() -> List[Dict[str, Any]]:
                     "size_mb": size_mb,
                     "size_str": f"{size_mb} MB" if size_mb >= 1 else f"{round(stats.st_size / 1024, 1)} KB",
                     "modified_time": stats.st_mtime,
-                    "stream_url": f"/api/files/stream/{rel_path}",
-                    "download_url": f"/api/files/download/{rel_path}",
+                    # Antes se insertaba rel_path crudo. Un archivo llamado
+                    # "Tema #1.mp3" generaba un link que el navegador cortaba
+                    # en el "#", y la descarga daba 404.
+                    "stream_url": f"/api/files/stream/{urllib.parse.quote(rel_path, safe='/')}",
+                    "download_url": f"/api/files/download/{urllib.parse.quote(rel_path, safe='/')}",
                 })
             except Exception:
                 continue
@@ -644,9 +787,19 @@ def list_downloaded_files() -> List[Dict[str, Any]]:
 
 
 def delete_file(rel_path: str) -> bool:
-    """Elimina un archivo descargado de forma segura."""
-    import urllib.parse
-    rel_path = urllib.parse.unquote(rel_path)
+    """
+    Elimina un archivo descargado de forma segura.
+
+    Recibe SIEMPRE una ruta ya decodificada: desde el JSON del frontend viene
+    tal cual, y en el endpoint DELETE la decodifica Starlette. Por eso ya no
+    se llama a unquote() aca.
+    """
+    # Antes: rel_path = urllib.parse.unquote(rel_path)
+    # Se comento porque decodificaba de mas. Un archivo llamado "abc%41.mp3"
+    # se convertia en "abcA.mp3" y el borrado apuntaba al archivo equivocado
+    # (o a ninguno). Ademas era la segunda decodificacion en el camino DELETE.
+    # import urllib.parse
+    # rel_path = urllib.parse.unquote(rel_path)
     cfg = get_config()
     base_dir = (BASE_DIR / cfg["download_dir"]).resolve()
 
