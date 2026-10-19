@@ -723,15 +723,19 @@ def download_spotify_batch(
             title=f"¡Colección completada! {len(successful_tracks)}/{total_tracks} pistas guardadas"
         )
     elif successful_tracks:
-        rel_folder = os.path.relpath(str(dest_folder), BASE_DIR / get_config()["download_dir"]).replace("\\", "/")
+        # Sin ZIP no hay un unico archivo que ofrecer. Antes download_url
+        # apuntaba a la CARPETA de la coleccion, pero el endpoint de descarga
+        # directa solo sirve archivos, asi que el boton "Guardar" del frontend
+        # devolvia 404. Se deja en None y el frontend oculta ese boton: los MP3
+        # quedan listados uno por uno en la pestaña Biblioteca.
         update_task(
             task_id,
             status="completed",
             progress=100.0,
             file_path=str(dest_folder),
             file_name=safe_collection,
-            download_url=f"/api/files/download/{urllib.parse.quote(rel_folder, safe='/')}",
-            title=f"¡Descarga completada! {len(successful_tracks)}/{total_tracks} canciones guardadas"
+            download_url=None,
+            title=f"¡Descarga completada! {len(successful_tracks)}/{total_tracks} canciones guardadas en la Biblioteca"
         )
     else:
         update_task(

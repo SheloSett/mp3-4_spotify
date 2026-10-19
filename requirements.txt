@@ -1,5 +1,13 @@
 # Motor de descarga y extracción de medios
-yt-dlp>=2026.7.4
+#
+# yt-dlp se instala con dos extras a proposito:
+#   - [default]: trae yt-dlp-ejs, el solucionador de los desafios JavaScript
+#     de YouTube. Sin el, yt-dlp avisa "No supported JavaScript runtime could
+#     be found" y a muchos videos les faltan formatos (o directamente fallan).
+#   - [deno]:    trae el runtime Deno como paquete de pip, que es el que yt-dlp
+#     usa por defecto para ejecutar ese JavaScript. Asi no hace falta instalar
+#     Deno ni Node en el sistema (Node solo sirve si es 22 o superior).
+yt-dlp[default,deno]>=2026.7.4
 spotipy>=2.26.0
 mutagen>=1.48.1
 

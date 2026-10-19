@@ -646,8 +646,16 @@ function listenToTaskProgress(taskId, prefix, onComplete) {
 
         const dlLink = document.getElementById('spotifyDirectDownloadLink');
         if (dlLink) {
-          dlLink.href = task.download_url;
-          dlLink.download = task.file_name || 'playlist.zip';
+          if (task.download_url) {
+            dlLink.href = task.download_url;
+            dlLink.download = task.file_name || 'playlist.zip';
+            dlLink.style.display = '';
+          } else {
+            // Descarga sin ZIP: no hay un archivo unico que guardar, los MP3
+            // quedan sueltos en la Biblioteca. Antes el link apuntaba a la
+            // carpeta de la coleccion y al tocarlo daba 404.
+            dlLink.style.display = 'none';
+          }
         }
         const actBox = document.getElementById('spotifyCompletedActions');
         if (actBox) actBox.classList.add('active');
