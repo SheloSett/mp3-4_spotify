@@ -124,6 +124,13 @@ def get_config():
     app_username = (os.getenv("APP_USERNAME", env_vals.get("APP_USERNAME", "admin")) or "admin").strip()
     app_password = (os.getenv("APP_PASSWORD", env_vals.get("APP_PASSWORD", "")) or "").strip()
 
+    # Remedios para cuando YouTube bloquea la IP del servidor (tipico en Render
+    # y otros hostings). Opcionales; vacios = sin cookies / sin proxy.
+    # Ver .env.example y downloader_core._preparar_cookies_ytdlp.
+    ytdlp_cookies_file = (os.getenv("YTDLP_COOKIES_FILE", env_vals.get("YTDLP_COOKIES_FILE", "")) or "").strip()
+    ytdlp_cookies_b64 = (os.getenv("YTDLP_COOKIES_B64", env_vals.get("YTDLP_COOKIES_B64", "")) or "").strip()
+    ytdlp_proxy = (os.getenv("YTDLP_PROXY", env_vals.get("YTDLP_PROXY", "")) or "").strip()
+
     return {
         "spotify_client_id": spotify_client_id,
         "spotify_client_secret": spotify_client_secret,
@@ -136,6 +143,9 @@ def get_config():
         "app_username": app_username,
         "app_password": app_password,
         "auth_enabled": bool(app_password),
+        "ytdlp_cookies_file": ytdlp_cookies_file,
+        "ytdlp_cookies_b64": ytdlp_cookies_b64,
+        "ytdlp_proxy": ytdlp_proxy,
     }
 
 
@@ -217,6 +227,7 @@ def buscar_ffmpeg():
 
 def get_system_diagnostics():
     """Obtiene el diagnóstico del sistema (ffmpeg, yt-dlp, python, espacio)."""
+    cfg = get_config()
     try:
         from yt_dlp.version import __version__ as ytdlp_ver
     except Exception:
@@ -241,5 +252,9 @@ def get_system_diagnostics():
         "os_name": platform.system() + " " + platform.release(),
         "disk_free_gb": free_gb,
         "disk_total_gb": total_gb,
-        "downloads_dir_exists": (BASE_DIR / get_config()["download_dir"]).exists(),
+        "downloads_dir_exists": (BASE_DIR / cfg["download_dir"]).exists(),
+        # Para comprobar desde /api/diagnostics que el servidor (p. ej. Render)
+        # tomo las cookies o el proxy anti-bloqueo de YouTube.
+        "youtube_cookies_configured": bool(cfg["ytdlp_cookies_file"] or cfg["ytdlp_cookies_b64"]),
+        "youtube_proxy_configured": bool(cfg["ytdlp_proxy"]),
     }

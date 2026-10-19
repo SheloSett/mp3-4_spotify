@@ -27,3 +27,14 @@ services:
 
       - key: DOWNLOAD_DIR
         value: descargas
+
+      # OPCIONAL - bloqueo de YouTube a IPs de datacenter. Sin esto, en Render
+      # las descargas de YouTube fallan con "Failed to extract any player
+      # response" aunque en tu PC anden. Se configura a mano en el dashboard
+      # (no acá, para no trabar el deploy pidiendo un valor):
+      #   1. Environment > Secret Files > subir tu cookies.txt de YouTube
+      #      (formato Netscape) con el nombre cookies.txt
+      #   2. Environment > Environment Variables > agregar
+      #      YTDLP_COOKIES_FILE = /etc/secrets/cookies.txt
+      #   3. (alternativa o complemento) YTDLP_PROXY = http://user:pass@host:puerto
+      # Detalles en .env.example.

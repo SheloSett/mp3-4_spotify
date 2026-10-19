@@ -3,12 +3,14 @@ import os
 import re
 import time
 import uuid
+import base64
 import shutil
 import zipfile
 import asyncio
+import tempfile
 import urllib.parse
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import yt_dlp
 import requests
 
@@ -99,6 +101,202 @@ def update_task(task_id: str, **kwargs):
 def get_task(task_id: str) -> Optional[Dict[str, Any]]:
     """Obtiene el estado de una tarea."""
     return TASKS.get(task_id)
+
+
+# =====================================================================
+# OPCIONES COMUNES DE YT-DLP (ffmpeg, cookies, proxy, avisos)
+# =====================================================================
+
+class _LoggerYtdlp:
+    """
+    Logger minimo para yt-dlp que GUARDA los avisos en vez de descartarlos.
+
+    Por que existe: las tres llamadas a yt-dlp usaban quiet/no_warnings, asi
+    que cuando YouTube rechazaba la peticion el usuario veia solo el error
+    final generico ("Failed to extract any player response... report this
+    issue on GitHub") y nunca el aviso previo que explica la causa real
+    ("Sign in to confirm you're not a bot", "HTTP Error 429", etc.).
+    Con los avisos a mano se arma un mensaje util en _explicar_error_ytdlp.
+    """
+
+    def __init__(self):
+        self.avisos: List[str] = []
+
+    def debug(self, msg):
+        # yt-dlp manda por aca tambien el progreso de descarga; no interesa.
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        texto = str(msg).strip()
+        if texto and texto not in self.avisos:
+            self.avisos.append(texto)
+            # Tambien al log del servidor, que es lo unico visible en Render.
+            print(f"[yt-dlp] {texto}")
+
+    def error(self, msg):
+        # El error ademas llega como excepcion; con loguearlo alcanza.
+        print(f"[yt-dlp] {msg}")
+
+
+# Cache de la copia escribible de las cookies (ver _preparar_cookies_ytdlp).
+_COOKIES_CACHE: Dict[str, Any] = {"clave": None, "ruta": None}
+
+
+def _preparar_cookies_ytdlp(cfg: Dict[str, Any]) -> Optional[str]:
+    """
+    Devuelve la ruta a un cookies.txt (formato Netscape) listo para yt-dlp,
+    o None si no hay cookies configuradas.
+
+    Por que existe: cuando la app corre en un hosting (Render, etc.) YouTube
+    bloquea la IP del servidor y yt-dlp falla con "Failed to extract any
+    player response" o "Sign in to confirm you're not a bot", aunque en la PC
+    del usuario funcione perfecto. La solucion documentada por yt-dlp es
+    pasarle las cookies de una sesion de YouTube iniciada en un navegador.
+
+    Se aceptan dos fuentes (ver .env.example):
+      - YTDLP_COOKIES_FILE: ruta a un cookies.txt. En Render se sube como
+        "Secret File" y queda montado en /etc/secrets/<nombre>.
+      - YTDLP_COOKIES_B64: el contenido del cookies.txt en base64, para
+        hostings que no tienen archivos secretos.
+
+    yt-dlp REESCRIBE el archivo de cookies al terminar (guarda las cookies
+    renovadas) y /etc/secrets es de solo lectura, asi que siempre se trabaja
+    sobre una copia en la carpeta temporal del sistema.
+    """
+    origen_archivo = (cfg.get("ytdlp_cookies_file") or "").strip()
+    origen_b64 = (cfg.get("ytdlp_cookies_b64") or "").strip()
+
+    if origen_archivo:
+        src = Path(origen_archivo)
+        if not src.is_file():
+            print(f"[cookies] YTDLP_COOKIES_FILE apunta a un archivo inexistente: {src}")
+            return None
+        try:
+            contenido = src.read_bytes()
+            clave = ("file", str(src), src.stat().st_mtime)
+        except OSError as e:
+            print(f"[cookies] No se pudo leer {src}: {e}")
+            return None
+    elif origen_b64:
+        try:
+            contenido = base64.b64decode("".join(origen_b64.split()))
+        except Exception as e:
+            print(f"[cookies] YTDLP_COOKIES_B64 no es base64 valido: {e}")
+            return None
+        clave = ("b64", len(origen_b64), hash(origen_b64))
+    else:
+        return None
+
+    # Reutilizar la copia si el origen no cambio: yt-dlp va guardando ahi las
+    # cookies renovadas y pisarlas en cada llamada las haria perder.
+    ruta_cache = _COOKIES_CACHE["ruta"]
+    if _COOKIES_CACHE["clave"] == clave and ruta_cache and os.path.isfile(ruta_cache):
+        return ruta_cache
+
+    try:
+        destino_dir = Path(tempfile.gettempdir()) / "mp3_spotify_downloader"
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        destino = destino_dir / "youtube_cookies.txt"
+        destino.write_bytes(contenido)
+    except OSError as e:
+        print(f"[cookies] No se pudo preparar la copia escribible de las cookies: {e}")
+        return None
+
+    _COOKIES_CACHE["clave"] = clave
+    _COOKIES_CACHE["ruta"] = str(destino)
+    print(f"[cookies] Cookies de YouTube cargadas desde {'YTDLP_COOKIES_FILE' if origen_archivo else 'YTDLP_COOKIES_B64'}.")
+    return str(destino)
+
+
+def _opciones_base_ytdlp(logger: Optional[_LoggerYtdlp] = None) -> Dict[str, Any]:
+    """
+    Opciones compartidas por TODAS las llamadas a yt-dlp de la app.
+
+    Antes cada funcion armaba su propio diccionario y repetia la logica de
+    ffmpeg_location. Ahora ademas se suman cookies y proxy, que son la
+    solucion para cuando YouTube bloquea la IP de un servidor (ver
+    _preparar_cookies_ytdlp y _explicar_error_ytdlp).
+    """
+    cfg = get_config()
+    opts: Dict[str, Any] = {
+        'quiet': True,
+        # Los avisos NO se silencian: van al logger, que los guarda para
+        # explicar el error si la extraccion termina fallando.
+        'no_warnings': False,
+    }
+    if logger is not None:
+        opts['logger'] = logger
+
+    carpeta_ffmpeg = buscar_ffmpeg()
+    if carpeta_ffmpeg:
+        opts['ffmpeg_location'] = carpeta_ffmpeg
+
+    cookies = _preparar_cookies_ytdlp(cfg)
+    if cookies:
+        opts['cookiefile'] = cookies
+
+    if cfg.get("ytdlp_proxy"):
+        opts['proxy'] = cfg["ytdlp_proxy"]
+
+    return opts
+
+
+# Fragmentos (en minusculas) que delatan que YouTube rechazo al servidor.
+_PISTAS_BLOQUEO_YOUTUBE = (
+    "failed to extract any player response",
+    "all player responses are invalid",
+    "confirm you're not a bot",
+    "confirm you’re not a bot",
+    "sign in to confirm",
+    "ip is likely being blocked",
+    "http error 429",
+)
+
+
+def _explicar_error_ytdlp(e: Exception, avisos: Optional[List[str]] = None) -> str:
+    """
+    Convierte una excepcion de yt-dlp en un mensaje que le sirva al usuario.
+
+    yt-dlp termina con un texto generico que pide "reportar el issue en
+    GitHub", pero la causa real casi siempre esta en un aviso anterior. Y si
+    la app corre en un hosting (Render) el motivo mas comun es que YouTube
+    bloquea las IPs de datacenter: en la PC anda y en el servidor no. Para
+    ese caso se explica que hacer (cookies o proxy) en vez de mandar a GitHub.
+    """
+    avisos = avisos or []
+    mensaje = str(e).strip()
+    # El pedido de reportar en GitHub no es algo que el usuario pueda resolver
+    # y tapa la causa, asi que se recorta.
+    mensaje = re.sub(
+        r";?\s*please report this issue on\s+https://github\.com/yt-dlp/yt-dlp/issues.*$",
+        "", mensaje, flags=re.IGNORECASE | re.DOTALL,
+    ).strip()
+
+    texto_completo = (mensaje + " " + " ".join(avisos)).lower()
+    if any(p in texto_completo for p in _PISTAS_BLOQUEO_YOUTUBE):
+        cfg = get_config()
+        if cfg.get("ytdlp_cookies_file") or cfg.get("ytdlp_cookies_b64"):
+            consejo = (
+                "YouTube rechazó la petición aunque hay cookies cargadas: probablemente "
+                "vencieron. Exportalas de nuevo desde el navegador y, si sigue pasando, "
+                "sumá un proxy residencial en YTDLP_PROXY."
+            )
+        else:
+            consejo = (
+                "YouTube bloqueó la IP del servidor; es normal en hostings como Render "
+                "aunque en tu PC funcione. Solución: cargar las cookies de una sesión de "
+                "YouTube (YTDLP_COOKIES_FILE o YTDLP_COOKIES_B64) o salir por un proxy "
+                "residencial (YTDLP_PROXY). Ver .env.example."
+            )
+        detalle = avisos[-1] if avisos else mensaje
+        return f"{consejo} Detalle: {detalle[:220]}"
+
+    if avisos:
+        return f"{mensaje} | Aviso de yt-dlp: {avisos[-1][:220]}"
+    return mensaje
 
 
 # =====================================================================
@@ -295,15 +493,12 @@ def get_spotify_info(url: str) -> Dict[str, Any]:
 
 def get_youtube_info(url: str) -> Dict[str, Any]:
     """Extrae información y formatos disponibles de YouTube o URL genérica."""
-    carpeta_ffmpeg = buscar_ffmpeg()
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
+    logger = _LoggerYtdlp()
+    ydl_opts = _opciones_base_ytdlp(logger)
+    ydl_opts.update({
         'skip_download': True,
         'noplaylist': True,
-    }
-    if carpeta_ffmpeg:
-        ydl_opts['ffmpeg_location'] = carpeta_ffmpeg
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -341,7 +536,7 @@ def get_youtube_info(url: str) -> Dict[str, Any]:
                 ]
             }
     except Exception as e:
-        return {"success": False, "error": f"Error al extraer información: {str(e)}"}
+        return {"success": False, "error": f"Error al extraer información: {_explicar_error_ytdlp(e, logger.avisos)}"}
 
 
 def analyze_url(url: str) -> Dict[str, Any]:
@@ -420,17 +615,13 @@ def download_youtube_media(
     Descarga video o audio de YouTube en la calidad especificada.
     """
     dest_folder = get_download_path(custom_subfolder)
-    carpeta_ffmpeg = buscar_ffmpeg()
+    logger = _LoggerYtdlp()
 
-    ydl_opts: Dict[str, Any] = {
+    ydl_opts: Dict[str, Any] = _opciones_base_ytdlp(logger)
+    ydl_opts.update({
         'noplaylist': True,
-        'quiet': True,
-        'no_warnings': False,
         'progress_hooks': [make_ytdlp_progress_hook(task_id)],
-    }
-
-    if carpeta_ffmpeg:
-        ydl_opts['ffmpeg_location'] = carpeta_ffmpeg
+    })
 
     if media_type == "audio":
         ydl_opts['format'] = 'bestaudio/best'
@@ -519,7 +710,7 @@ def download_youtube_media(
         return None
 
     except Exception as e:
-        err_msg = str(e)
+        err_msg = _explicar_error_ytdlp(e, logger.avisos)
         update_task(task_id, status="error", error=err_msg, title="Error en la descarga")
         return None
 
@@ -588,14 +779,21 @@ def download_single_spotify_track(
     bitrate: str = "192",
     album: str = "",
     cover_url: Optional[str] = None
-) -> Optional[str]:
-    """Busca una canción en YouTube y la guarda como MP3."""
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Busca una canción en YouTube y la guarda como MP3.
+
+    Devuelve (ruta_del_mp3, motivo_del_error). Antes devolvia solo la ruta y
+    el motivo se perdia en un print; si fallaban todas las pistas el usuario
+    veia "no se pudo descargar ninguna" sin saber por que.
+    """
     safe_title = sanitize_filename(title)
     safe_artist = sanitize_filename(artist)
     query = f"{title} {artist} audio"
-    carpeta_ffmpeg = buscar_ffmpeg()
+    logger = _LoggerYtdlp()
 
-    ydl_opts = {
+    ydl_opts = _opciones_base_ytdlp(logger)
+    ydl_opts.update({
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -603,13 +801,9 @@ def download_single_spotify_track(
             'preferredquality': str(bitrate),
         }],
         'outtmpl': str(download_folder / f'{safe_title} - {safe_artist}.%(ext)s'),
-        'quiet': True,
-        'no_warnings': True,
         'default_search': 'ytsearch1',
         'noplaylist': True,
-    }
-    if carpeta_ffmpeg:
-        ydl_opts['ffmpeg_location'] = carpeta_ffmpeg
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -629,11 +823,12 @@ def download_single_spotify_track(
                 # Escribir las etiquetas ID3 con los datos reales de Spotify,
                 # que son mucho mas confiables que el titulo del video de YouTube.
                 embed_mp3_metadata(final_filepath, title, artist, album, cover_url)
-                return final_filepath
-            return None
+                return final_filepath, None
+            return None, "yt-dlp no generó el archivo MP3 (¿falta ffmpeg en el servidor?)."
     except Exception as e:
-        print(f"Error descargando pista '{title} - {artist}': {e}")
-        return None
+        motivo = _explicar_error_ytdlp(e, logger.avisos)
+        print(f"Error descargando pista '{title} - {artist}': {motivo}")
+        return None, motivo
 
 
 def download_spotify_batch(
@@ -652,6 +847,7 @@ def download_spotify_batch(
 
     total_tracks = len(tracks)
     successful_tracks: List[str] = []
+    ultimo_error: Optional[str] = None
 
     update_task(
         task_id,
@@ -680,7 +876,7 @@ def download_spotify_batch(
             title=f"[{index}/{total_tracks}] {item_label}"
         )
 
-        file_path = download_single_spotify_track(
+        file_path, motivo_error = download_single_spotify_track(
             title,
             artists,
             dest_folder,
@@ -690,6 +886,8 @@ def download_spotify_batch(
         )
         if file_path and os.path.exists(file_path):
             successful_tracks.append(file_path)
+        elif motivo_error:
+            ultimo_error = motivo_error
 
         update_task(
             task_id,
@@ -738,10 +936,14 @@ def download_spotify_batch(
             title=f"¡Descarga completada! {len(successful_tracks)}/{total_tracks} canciones guardadas en la Biblioteca"
         )
     else:
+        # Se agrega el motivo del ultimo fallo. En un hosting la causa casi
+        # siempre es el bloqueo de YouTube a la IP del servidor, y sin verlo
+        # el usuario no tenia forma de saber que hacer.
+        detalle = f" Último error: {ultimo_error}" if ultimo_error else ""
         update_task(
             task_id,
             status="error",
-            error="No se pudo descargar ninguna de las canciones seleccionadas.",
+            error="No se pudo descargar ninguna de las canciones seleccionadas." + detalle,
             title="Error en la descarga de la colección"
         )
 
